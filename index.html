@@ -43,7 +43,10 @@
             color: #666;
             margin-bottom: 15px;
         }
-        input[type="text"] {
+        .input-group {
+            margin: 15px 0;
+        }
+        input[type="text"], input[type="number"] {
             font-size: 1rem;
             padding: 10px;
             width: 60%;
@@ -83,16 +86,20 @@
     <h2>Live Multi-Device Race Room</h2>
 
     <div id="setupArea" class="setup-box">
-        <h3>Join or Create a Racing Room</h3>
+        <h3>Create a Racing Room</h3>
+        <input type="number" id="maxDevicesInput" placeholder="Max devices allowed (e.g. 5)" min="1" value="5">
+        <br>
         <button onclick="createRoom()">Create New Room</button>
         <p>— OR —</p>
+        <h3>Join an Existing Room</h3>
         <input type="text" id="joinRoomInput" placeholder="Enter 4-Digit Room Code">
+        <br>
         <button onclick="joinRoom()">Join Room</button>
     </div>
 
     <div id="statusArea" class="hidden">
         <div id="roomCodeDisplay" class="room-highlight"></div>
-        <div id="deviceCountDisplay" class="device-count">Connected Devices: 0</div>
+        <div id="deviceCountDisplay" class="device-count">Connected Devices: 0 / Unlimited</div>
     </div>
 
     <div id="appArea" class="hidden">
@@ -144,6 +151,7 @@
         let elapsedTime = 0;
         let obstacleCount = 0;
         let raceData = []; 
+        let roomMaxDevices = Infinity;
 
         // --- ROOM CODES MANAGEMENT ---
         function generateRoomCode() {
@@ -151,12 +159,25 @@
         }
 
         function createRoom() {
+            const maxInput = document.getElementById('maxDevicesInput').value;
+            roomMaxDevices = maxInput ? parseInt(maxInput, 10) : Infinity;
+
+            if (roomMaxDevices < 1) {
+                return alert("Please enter a valid limit of 1 or more devices.");
+            }
+
             currentRoomId = generateRoomCode();
-            database.ref('rooms/' + currentRoomId + '/timerState').set({
-                isRunning: false,
-                startTime: 0,
-                elapsedTime: 0
+            
+            // Set up the room layout data along with its device limit rules
+            database.ref('rooms/' + currentRoomId).set({
+                maxDevices: roomMaxDevices,
+                timerState: {
+                    isRunning: false,
+                    startTime: 0,
+                    elapsedTime: 0
+                }
             });
+            
             startListeningToRoom(currentRoomId);
         }
 
@@ -166,7 +187,17 @@
             
             database.ref('rooms/' + inputCode).once('value', (snapshot) => {
                 if (snapshot.exists()) {
+                    const roomData = snapshot.val();
+                    const allowedLimit = roomData.maxDevices || Infinity;
+                    const currentPresence = roomData.presence ? Object.keys(roomData.presence).length : 0;
+
+                    // Security check: Guard against entry if room limit is breached
+                    if (currentPresence >= allowedLimit) {
+                        return alert(`Cannot join room ${inputCode}. This room is full! (Max limit: ${allowedLimit} devices)`);
+                    }
+
                     currentRoomId = inputCode;
+                    roomMaxDevices = allowedLimit;
                     startListeningToRoom(currentRoomId);
                 } else {
                     alert("Room code not found! Please make sure the host created it first.");
@@ -174,7 +205,6 @@
             });
         }
 
-        // Switch screen views and link listeners to the unique room path
         function startListeningToRoom(roomId) {
             document.getElementById('setupArea').classList.add('hidden');
             document.getElementById('statusArea').classList.remove('hidden');
@@ -182,27 +212,25 @@
             document.getElementById('appArea').classList.remove('hidden');
 
             // --- DEVICE PRESENCE SYSTEM ---
-            // Create a temporary reference item unique to this device session
             const myPresenceRef = database.ref('rooms/' + roomId + '/presence').push();
             
-            // Monitor connection health to register and drop users automatically
             database.ref('.info/connected').on('value', (snapshot) => {
                 if (snapshot.val() === true) {
-                    // Tell Firebase to delete this record if the user closes their app/tab
                     myPresenceRef.onDisconnect().remove();
-                    // Set status to true to show we are currently online
                     myPresenceRef.set(true);
                 }
             });
 
-            // Listen for total connected devices count in this room
+            // Monitor total connected count vs the custom maximum restriction limit
             database.ref('rooms/' + roomId + '/presence').on('value', (snapshot) => {
                 const presenceData = snapshot.val();
                 const totalConnected = presenceData ? Object.keys(presenceData).length : 0;
-                document.getElementById('deviceCountDisplay').innerText = `Connected Devices: ${totalConnected}`;
+                
+                const displayLimit = roomMaxDevices === Infinity ? "Unlimited" : roomMaxDevices;
+                document.getElementById('deviceCountDisplay').innerText = `Connected Devices: ${totalConnected} / ${displayLimit}`;
             });
 
-            // 1. Listen to timer adjustments ONLY inside this room
+            // 1. Listen to timer adjustments
             database.ref('rooms/' + roomId + '/timerState').on('value', (snapshot) => {
                 const data = snapshot.val();
                 if (data) {
@@ -213,7 +241,7 @@
                 }
             });
 
-            // 2. Listen to historical milestone markers ONLY inside this room
+            // 2. Listen to split logs
             database.ref('rooms/' + roomId + '/records').on('value', (snapshot) => {
                 const data = snapshot.val();
                 const tbody = document.getElementById('resultsBody');
@@ -261,7 +289,6 @@
             }
         }
 
-        // --- ACTIONS WRITING TARGETED TO OUR SPECIFIC ROOM ---
         function handleStartStopClick() {
             if (!isRunning) {
                 database.ref('rooms/' + currentRoomId + '/timerState').set({
@@ -300,6 +327,7 @@
             database.ref('rooms/' + currentRoomId + '/records').remove();
         }
 
+        // --- FORMAT TIMER ---
         function formatTime(ms) {
             if (ms < 0) ms = 0;
             let milliseconds = Math.floor((ms % 1000) / 10);
