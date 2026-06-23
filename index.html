@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Firebase Multi-Device Race Tracker</title>
+    <title>Firebase Room Race Tracker</title>
     <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
     
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
@@ -25,16 +25,27 @@
             font-family: monospace;
             color: #333;
         }
-        .input-group {
-            margin: 20px 0;
+        .setup-box {
+            background: #fff;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .room-highlight {
+            font-size: 1.5rem;
+            font-weight: bold;
+            color: #007bff;
+            margin: 10px 0;
         }
         input[type="text"] {
             font-size: 1rem;
             padding: 10px;
             width: 60%;
-            max-width: 300px;
+            max-width: 250px;
             border: 1px solid #ccc;
             border-radius: 4px;
+            margin: 5px;
         }
         button {
             font-size: 1rem;
@@ -59,51 +70,68 @@
         }
         th, td { border: 1px solid #ddd; padding: 10px; text-align: left; }
         th { background-color: #f2f2f2; }
+        .hidden { display: none; }
     </style>
 </head>
 <body>
 
-    <h2>Live Multi-Device Race Stopwatch</h2>
-    <div class="display" id="display">00:00:00.00</div>
+    <h2>Live Multi-Device Race Room</h2>
 
-    <div class="input-group">
-        <input type="text" id="obstacleName" placeholder="Next Obstacle Name">
+    <div id="setupArea" class="setup-box">
+        <h3>Join or Create a Racing Room</h3>
+        <button onclick="createRoom()">Create New Room</button>
+        <p>— OR —</p>
+        <input type="text" id="joinRoomInput" placeholder="Enter 4-Digit Room Code">
+        <button onclick="joinRoom()">Join Room</button>
     </div>
 
-    <button id="startStopBtn" onclick="handleStartStopClick()">Start</button>
-    <button onclick="handleRecordClick()" class="save">Record Obstacle</button>
-    <button onclick="handleResetClick()">Reset Timer</button>
-    <button onclick="exportToExcel()" class="export">Download Excel</button>
+    <div id="statusArea" class="hidden">
+        <div id="roomCodeDisplay" class="room-highlight"></div>
+    </div>
 
-    <h3>Recorded Times (Global Sync)</h3>
-    <table>
-        <thead>
-            <tr>
-                <th>Obstacle / Marker Name</th>
-                <th>Timestamp</th>
-                <th>Split Time</th>
-            </tr>
-        </thead>
-        <tbody id="resultsBody"></tbody>
-    </table>
+    <div id="appArea" class="hidden">
+        <div class="display" id="display">00:00:00.00</div>
+
+        <div class="input-group">
+            <input type="text" id="obstacleName" placeholder="Next Obstacle Name">
+        </div>
+
+        <button id="startStopBtn" onclick="handleStartStopClick()">Start</button>
+        <button onclick="handleRecordClick()" class="save">Record Obstacle</button>
+        <button onclick="handleResetClick()">Reset Timer</button>
+        <button onclick="exportToExcel()" class="export">Download Excel</button>
+
+        <h3>Recorded Times (Synced for This Room)</h3>
+        <table>
+            <thead>
+                <tr>
+                    <th>Obstacle / Marker Name</th>
+                    <th>Timestamp</th>
+                    <th>Split Time</th>
+                </tr>
+            </thead>
+            <tbody id="resultsBody"></tbody>
+        </table>
+    </div>
 
     <script>
-        // --- 1. PASTE YOUR COPIED FIREBASE CONFIG HERE ---
+        // Your Custom Firebase Config
         const firebaseConfig = {
             apiKey: "AIzaSyBZ-4464p7-F_ZeBkAWv5012DcW0EyECCA",
             authDomain: "race-stopwatch.firebaseapp.com",
-            databaseURL: "https://race-stopwatch-default-rtdb.firebaseio.com", // Added this for you!
+            databaseURL: "https://race-stopwatch-default-rtdb.firebaseio.com", 
             projectId: "race-stopwatch",
             storageBucket: "race-stopwatch.firebasestorage.app",
             messagingSenderId: "1097845465509",
             appId: "1:1097845465509:web:cf537f80734c8132bc484c"
         };
 
-        // Initialize Firebase connection
+        // Initialize Firebase
         firebase.initializeApp(firebaseConfig);
         const database = firebase.database();
 
-        // Local Tracking Variables
+        // App variables
+        let currentRoomId = "";
         let timerInterval;
         let isRunning = false;
         let startTime = 0;
@@ -111,49 +139,86 @@
         let obstacleCount = 0;
         let raceData = []; 
 
-        // --- 2. LIVE DATABASE LISTENERS ---
-        
-        // Listen to the timer engine state
-        database.ref('timerState').on('value', (snapshot) => {
-            const data = snapshot.val();
-            if (data) {
-                isRunning = data.isRunning;
-                startTime = data.startTime;
-                elapsedTime = data.elapsedTime;
-                updateClockUI();
-            }
-        });
+        // --- ROOM CODES MANAGMENT ---
+        function generateRoomCode() {
+            return Math.floor(1000 + Math.random() * 9000).toString();
+        }
 
-        // Listen for record table updates
-        database.ref('records').on('value', (snapshot) => {
-            const data = snapshot.val();
-            const tbody = document.getElementById('resultsBody');
-            tbody.innerHTML = ''; 
-            raceData = [];        
+        function createRoom() {
+            currentRoomId = generateRoomCode();
+            // Setup a clean path inside the database for this new room code
+            database.ref('rooms/' + currentRoomId + '/timerState').set({
+                isRunning: false,
+                startTime: 0,
+                elapsedTime: 0
+            });
+            startListeningToRoom(currentRoomId);
+        }
+
+        function joinRoom() {
+            const inputCode = document.getElementById('joinRoomInput').value.trim();
+            if (!inputCode) return alert("Please enter a room code!");
             
-            if (data) {
-                Object.keys(data).forEach((key) => {
-                    const record = data[key];
-                    const row = `<tr>
-                        <td>${record.name}</td>
-                        <td>${record.timestamp}</td>
-                        <td>${record.splitTime}</td>
-                    </tr>`;
-                    tbody.innerHTML += row;
+            // Check if the room exists before jumping in
+            database.ref('rooms/' + inputCode).once('value', (snapshot) => {
+                if (snapshot.exists()) {
+                    currentRoomId = inputCode;
+                    startListeningToRoom(currentRoomId);
+                } else {
+                    alert("Room code not found! Please make sure the host created it first.");
+                }
+            });
+        }
 
-                    raceData.push({
-                        "Obstacle Name": record.name,
-                        "Time of Day": record.timestamp,
-                        "Race Duration": record.splitTime
+        // Switch screen views and link listeners to the unique room path
+        function startListeningToRoom(roomId) {
+            document.getElementById('setupArea').classList.add('hidden');
+            document.getElementById('statusArea').classList.remove('hidden');
+            document.getElementById('roomCodeDisplay').innerText = `Active Room Code: ${roomId}`;
+            document.getElementById('appArea').classList.remove('hidden');
+
+            // 1. Listen to timer adjustments ONLY inside this room
+            database.ref('rooms/' + roomId + '/timerState').on('value', (snapshot) => {
+                const data = snapshot.val();
+                if (data) {
+                    isRunning = data.isRunning;
+                    startTime = data.startTime;
+                    elapsedTime = data.elapsedTime;
+                    updateClockUI();
+                }
+            });
+
+            // 2. Listen to historical milestone markers ONLY inside this room
+            database.ref('rooms/' + roomId + '/records').on('value', (snapshot) => {
+                const data = snapshot.val();
+                const tbody = document.getElementById('resultsBody');
+                tbody.innerHTML = ''; 
+                raceData = [];        
+                
+                if (data) {
+                    Object.keys(data).forEach((key) => {
+                        const record = data[key];
+                        const row = `<tr>
+                            <td>${record.name}</td>
+                            <td>${record.timestamp}</td>
+                            <td>${record.splitTime}</td>
+                        </tr>`;
+                        tbody.innerHTML += row;
+
+                        raceData.push({
+                            "Obstacle Name": record.name,
+                            "Time of Day": record.timestamp,
+                            "Race Duration": record.splitTime
+                        });
                     });
-                });
-                obstacleCount = Object.keys(data).length;
-            } else {
-                obstacleCount = 0;
-            }
-        });
+                    obstacleCount = Object.keys(data).length;
+                } else {
+                    obstacleCount = 0;
+                }
+            });
+        }
 
-        // --- 3. UI RENDERING CLOCK LOOP ---
+        // --- UI CLOCK SYNC LOOP ---
         function updateClockUI() {
             clearInterval(timerInterval);
             const btn = document.getElementById('startStopBtn');
@@ -171,16 +236,16 @@
             }
         }
 
-        // --- 4. DATA SYNCHRONIZATION EVENT ACTIONS ---
+        // --- ACTIONS WRITING TARGETED TO OUR SPECIFIC ROOM ---
         function handleStartStopClick() {
             if (!isRunning) {
-                database.ref('timerState').set({
+                database.ref('rooms/' + currentRoomId + '/timerState').set({
                     isRunning: true,
                     startTime: Date.now() - elapsedTime,
                     elapsedTime: elapsedTime
                 });
             } else {
-                database.ref('timerState').set({
+                database.ref('rooms/' + currentRoomId + '/timerState').set({
                     isRunning: false,
                     startTime: startTime,
                     elapsedTime: Date.now() - startTime
@@ -196,7 +261,7 @@
             let customName = nameInput.value.trim();
             if (customName === "") customName = `Obstacle ${obstacleCount + 1}`;
 
-            database.ref('records').push({
+            database.ref('rooms/' + currentRoomId + '/records').push({
                 name: customName,
                 timestamp: new Date().toLocaleTimeString(),
                 splitTime: formatTime(currentTrackedTime)
@@ -206,8 +271,8 @@
         }
 
         function handleResetClick() {
-            database.ref('timerState').set({ isRunning: false, startTime: 0, elapsedTime: 0 });
-            database.ref('records').remove(); // Clears out history globally for a clean run
+            database.ref('rooms/' + currentRoomId + '/timerState').set({ isRunning: false, startTime: 0, elapsedTime: 0 });
+            database.ref('rooms/' + currentRoomId + '/records').remove();
         }
 
         function formatTime(ms) {
@@ -224,7 +289,7 @@
             const worksheet = XLSX.utils.json_to_sheet(raceData);
             const workbook = XLSX.utils.book_new();
             XLSX.utils.book_append_sheet(workbook, worksheet, "Race Results");
-            XLSX.writeFile(workbook, "race_results.xlsx");
+            XLSX.writeFile(workbook, `room_${currentRoomId}_results.xlsx`);
         }
     </script>
 </body>
