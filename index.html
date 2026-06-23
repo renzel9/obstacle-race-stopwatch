@@ -143,6 +143,9 @@
         firebase.initializeApp(firebaseConfig);
         const database = firebase.database();
 
+        // Generate a completely unique local device token name
+        const uniqueDeviceId = "device-" + Math.random().toString(36).substring(2, 15);
+
         // App variables
         let currentRoomId = "";
         let timerInterval;
@@ -153,7 +156,6 @@
         let raceData = []; 
         let roomMaxDevices = Infinity;
 
-        // --- ROOM CODES MANAGEMENT ---
         function generateRoomCode() {
             return Math.floor(1000 + Math.random() * 9000).toString();
         }
@@ -168,7 +170,6 @@
 
             currentRoomId = generateRoomCode();
             
-            // Set up the room layout data along with its device limit rules
             database.ref('rooms/' + currentRoomId).set({
                 maxDevices: roomMaxDevices,
                 timerState: {
@@ -191,7 +192,6 @@
                     const allowedLimit = roomData.maxDevices || Infinity;
                     const currentPresence = roomData.presence ? Object.keys(roomData.presence).length : 0;
 
-                    // Security check: Guard against entry if room limit is breached
                     if (currentPresence >= allowedLimit) {
                         return alert(`Cannot join room ${inputCode}. This room is full! (Max limit: ${allowedLimit} devices)`);
                     }
@@ -211,8 +211,9 @@
             document.getElementById('roomCodeDisplay').innerText = `Active Room Code: ${roomId}`;
             document.getElementById('appArea').classList.remove('hidden');
 
-            // --- DEVICE PRESENCE SYSTEM ---
-            const myPresenceRef = database.ref('rooms/' + roomId + '/presence').push();
+            // --- FIXED UNIQUE DEVICE PRESENCE SYSTEM ---
+            // Force a dedicated database slot named after our uniqueDeviceId variable
+            const myPresenceRef = database.ref('rooms/' + roomId + '/presence/' + uniqueDeviceId);
             
             database.ref('.info/connected').on('value', (snapshot) => {
                 if (snapshot.val() === true) {
@@ -221,7 +222,7 @@
                 }
             });
 
-            // Monitor total connected count vs the custom maximum restriction limit
+            // Monitor total connected count
             database.ref('rooms/' + roomId + '/presence').on('value', (snapshot) => {
                 const presenceData = snapshot.val();
                 const totalConnected = presenceData ? Object.keys(presenceData).length : 0;
@@ -258,92 +259,91 @@
                         </tr>`;
                         tbody.innerHTML += row;
 
-                        raceData.push({
-                            "Obstacle Name": record.name,
-                            "Time of Day": record.timestamp,
-                            "Race Duration": record.splitTime
-                        });
+                    raceData.push({
+                        "Obstacle Name": record.name,
+                        "Time of Day": record.timestamp,
+                        "Race Duration": record.splitTime
                     });
-                    obstacleCount = Object.keys(data).length;
-                } else {
-                    obstacleCount = 0;
-                }
+                });
+                obstacleCount = Object.keys(data).length;
+            } else {
+                obstacleCount = 0;
+            }
+        });
+    }
+
+    // --- UI CLOCK SYNC LOOP ---
+    function updateClockUI() {
+        clearInterval(timerInterval);
+        const btn = document.getElementById('startStopBtn');
+
+        if (isRunning) {
+            btn.innerText = 'Stop';
+            btn.className = 'stop';
+            timerInterval = setInterval(() => {
+                document.getElementById('display').innerText = formatTime(Date.now() - startTime);
+            }, 10);
+        } else {
+            btn.innerText = 'Start';
+            btn.className = '';
+            document.getElementById('display').innerText = formatTime(elapsedTime);
+        }
+    }
+
+    function handleStartStopClick() {
+        if (!isRunning) {
+            database.ref('rooms/' + currentRoomId + '/timerState').set({
+                isRunning: true,
+                startTime: Date.now() - elapsedTime,
+                elapsedTime: elapsedTime
+            });
+        } else {
+            database.ref('rooms/' + currentRoomId + '/timerState').set({
+                isRunning: false,
+                startTime: startTime,
+                elapsedTime: Date.now() - startTime
             });
         }
+    }
 
-        // --- UI CLOCK SYNC LOOP ---
-        function updateClockUI() {
-            clearInterval(timerInterval);
-            const btn = document.getElementById('startStopBtn');
+    function handleRecordClick() {
+        let currentTrackedTime = isRunning ? (Date.now() - startTime) : elapsedTime;
+        if (currentTrackedTime === 0) return;
 
-            if (isRunning) {
-                btn.innerText = 'Stop';
-                btn.className = 'stop';
-                timerInterval = setInterval(() => {
-                    document.getElementById('display').innerText = formatTime(Date.now() - startTime);
-                }, 10);
-            } else {
-                btn.innerText = 'Start';
-                btn.className = '';
-                document.getElementById('display').innerText = formatTime(elapsedTime);
-            }
-        }
+        const nameInput = document.getElementById('obstacleName');
+        let customName = nameInput.value.trim();
+        if (customName === "") customName = `Obstacle ${obstacleCount + 1}`;
 
-        function handleStartStopClick() {
-            if (!isRunning) {
-                database.ref('rooms/' + currentRoomId + '/timerState').set({
-                    isRunning: true,
-                    startTime: Date.now() - elapsedTime,
-                    elapsedTime: elapsedTime
-                });
-            } else {
-                database.ref('rooms/' + currentRoomId + '/timerState').set({
-                    isRunning: false,
-                    startTime: startTime,
-                    elapsedTime: Date.now() - startTime
-                });
-            }
-        }
+        database.ref('rooms/' + currentRoomId + '/records').push({
+            name: customName,
+            timestamp: new Date().toLocaleTimeString(),
+            splitTime: formatTime(currentTrackedTime)
+        });
 
-        function handleRecordClick() {
-            let currentTrackedTime = isRunning ? (Date.now() - startTime) : elapsedTime;
-            if (currentTrackedTime === 0) return;
+        nameInput.value = "";
+    }
 
-            const nameInput = document.getElementById('obstacleName');
-            let customName = nameInput.value.trim();
-            if (customName === "") customName = `Obstacle ${obstacleCount + 1}`;
+    function handleResetClick() {
+        database.ref('rooms/' + currentRoomId + '/timerState').set({ isRunning: false, startTime: 0, elapsedTime: 0 });
+        database.ref('rooms/' + currentRoomId + '/records').remove();
+    }
 
-            database.ref('rooms/' + currentRoomId + '/records').push({
-                name: customName,
-                timestamp: new Date().toLocaleTimeString(),
-                splitTime: formatTime(currentTrackedTime)
-            });
+    function formatTime(ms) {
+        if (ms < 0) ms = 0;
+        let milliseconds = Math.floor((ms % 1000) / 10);
+        let seconds = Math.floor((ms / 1000) % 60);
+        let minutes = Math.floor((ms / (1000 * 60)) % 60);
+        let hours = Math.floor((ms / (1000 * 60 * 60)) % 24);
+        return [hours, minutes, seconds].map(v => v.toString().padStart(2, '0')).join(':') + '.' + milliseconds.toString().padStart(2, '0');
+    }
 
-            nameInput.value = "";
-        }
-
-        function handleResetClick() {
-            database.ref('rooms/' + currentRoomId + '/timerState').set({ isRunning: false, startTime: 0, elapsedTime: 0 });
-            database.ref('rooms/' + currentRoomId + '/records').remove();
-        }
-
-        // --- FORMAT TIMER ---
-        function formatTime(ms) {
-            if (ms < 0) ms = 0;
-            let milliseconds = Math.floor((ms % 1000) / 10);
-            let seconds = Math.floor((ms / 1000) % 60);
-            let minutes = Math.floor((ms / (1000 * 60)) % 60);
-            let hours = Math.floor((ms / (1000 * 60 * 60)) % 24);
-            return [hours, minutes, seconds].map(v => v.toString().padStart(2, '0')).join(':') + '.' + milliseconds.toString().padStart(2, '0');
-        }
-
-        function exportToExcel() {
-            if (raceData.length === 0) return alert("No times recorded yet!");
-            const worksheet = XLSX.utils.json_to_sheet(raceData);
-            const workbook = XLSX.utils.book_new();
-            XLSX.utils.book_append_sheet(workbook, worksheet, "Race Results");
-            XLSX.writeFile(workbook, `room_${currentRoomId}_results.xlsx`);
-        }
-    </script>
+    function exportToExcel() {
+        if (raceData.length === 0) return alert("No times recorded yet!");
+        const worksheet = XLSX.utils.json_to_sheet(raceData);
+        const workbook = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(workbook, worksheet, "Race Results");
+        XLSX.writeFile(workbook, `room_${currentRoomId}_results.xlsx`);
+    }
+</script>
 </body>
 </html>
