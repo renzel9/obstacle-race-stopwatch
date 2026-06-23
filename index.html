@@ -180,6 +180,7 @@
         }
 
         function createRoom() {
+            console.log("Create Room Button Clicked!");
             const maxInput = document.getElementById('maxDevicesInput').value;
             roomMaxDevices = maxInput ? parseInt(maxInput, 10) : Infinity;
 
@@ -188,6 +189,7 @@
             }
 
             currentRoomId = generateRoomCode();
+            console.log("Generated Room Code:", currentRoomId);
             
             database.ref('rooms/' + currentRoomId).set({
                 maxDevices: roomMaxDevices,
@@ -196,9 +198,13 @@
                     startTime: 0,
                     elapsedTime: 0
                 }
+            }).then(() => {
+                console.log("Firebase Room Data Successfully Initialized!");
+                startListeningToRoom(currentRoomId);
+            }).catch((error) => {
+                console.error("Firebase Database Write Error:", error);
+                alert("Database error: " + error.message);
             });
-            
-            startListeningToRoom(currentRoomId);
         }
 
         function joinRoom() {
