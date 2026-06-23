@@ -115,223 +115,207 @@
 
     <script>
         let peer;
-        let conn; // For Peer connection
-        let connections = []; // Host keeps track of all joined peers
-        let isHost = false;
-        let roomID = "";
+let conn; 
+let connections = []; 
+let isHost = false;
+let roomID = "";
 
-        // Stopwatch Core Variables (Only simulated accurately by Host)
-        let timerInterval;
-        let startTime = 0;
-        let elapsedTime = 0;
-        let isRunning = false;
-        let obstacleCount = 0;
-        let raceData = [];
+// Stopwatch Core Variables
+let timerInterval;
+let startTime = 0;
+let elapsedTime = 0;
+let isRunning = false;
+let obstacleCount = 0;
+let raceData = [];
 
-        // --- ROOM CREATION & JOINING LOGIC ---
+// --- ROOM CREATION & JOINING LOGIC ---
+function generateRoomCode() {
+    return Math.floor(1000 + Math.random() * 9000).toString();
+}
 
-        // Helper to generate a clean 4-digit numeric Kahoot code
-        function generateRoomCode() {
-            return Math.floor(1000 + Math.random() * 9000).toString();
-        }
+function createRoom() {
+    isHost = true;
+    roomID = generateRoomCode();
+    
+    peer = new Peer(roomID);
+    peer.on('open', (id) => {
+        showAppInterface(`Host Mode`, `Room ID Code: ${id}`);
+    });
 
-        function createRoom() {
-            isHost = true;
-            roomID = generateRoomCode();
-            
-            // Connect to free public PeerJS cloud server using our custom 4-digit ID
-            peer = new Peer(roomID);
+    peer.on('connection', (connection) => {
+        connections.push(connection);
+        setupDataListener(connection);
+        // Alert the host to instantly broadcast its exact clock state to the new arrival
+        setTimeout(() => { sendStateToPeers(); }, 500); 
+    });
+}
 
-            peer.on('open', (id) => {
-                showAppInterface(`Host Mode`, `Room ID Code: ${id}`);
-            });
+function joinRoom() {
+    isHost = false;
+    roomID = document.getElementById('joinRoomInput').value.trim();
+    if(!roomID) return alert("Please enter a room code!");
 
-            // Host listens for incoming peer devices joining the room
-            peer.on('connection', (connection) => {
-                connections.push(connection);
-                setupDataListener(connection);
+    peer = new Peer();
+    peer.on('open', () => {
+        conn = peer.connect(roomID);
+        setupDataListener(conn);
+        conn.on('open', () => {
+            showAppInterface('Guest Mode', `Connected to Room: ${roomID}`);
+        });
+    });
+}
+
+function showAppInterface(role, statusText) {
+    document.getElementById('setupArea').classList.add('hidden');
+    document.getElementById('statusArea').classList.remove('hidden');
+    document.getElementById('appArea').classList.remove('hidden');
+    document.getElementById('roleBadge').innerText = role;
+    document.getElementById('roomCodeDisplay').innerText = statusText;
+}
+
+// --- DATA NETWORKING PIPELINE ---
+function setupDataListener(connection) {
+    connection.on('data', (data) => {
+        if (isHost) {
+            if (data.action === 'START_STOP') triggerStartStop();
+            if (data.action === 'RECORD') triggerRecord(data.customName);
+            if (data.action === 'RESET') triggerReset();
+        } else {
+            if (data.type === 'STATE_SYNC') {
+                isRunning = data.isRunning;
+                startTime = data.startTime;
+                elapsedTime = data.elapsedTime;
+                raceData = data.raceData;
+                obstacleCount = data.obstacleCount;
                 
-                // Immediately push current clock state to the newly joined peer
-                sendStateToPeers();
-            });
-        }
-
-        function joinRoom() {
-            isHost = false;
-            roomID = document.getElementById('joinRoomInput').value.trim();
-            
-            if(!roomID) return alert("Please enter a room code!");
-
-            peer = new Peer(); // Generate a random ID for this peer device
-
-            peer.on('open', () => {
-                // Connect directly to the host's room ID
-                conn = peer.connect(roomID);
-                setupDataListener(conn);
-                
-                conn.on('open', () => {
-                    showAppInterface(`Peer Guest Mode`, `Connected to Room: ${roomID}`);
-                });
-            });
-        }
-
-        function showAppInterface(role, statusText) {
-            document.getElementById('setupArea').classList.add('hidden');
-            document.getElementById('statusArea').classList.remove('hidden');
-            document.getElementById('appArea').classList.remove('hidden');
-            document.getElementById('roleBadge').innerText = role;
-            document.getElementById('roomCodeDisplay').innerText = statusText;
-        }
-
-        // --- DATA NETWORKING PIPELINE ---
-
-        function setupDataListener(connection) {
-            connection.on('data', (data) => {
-                if (isHost) {
-                    // Host receives action commands from guest browsers
-                    if (data.action === 'START_STOP') triggerStartStop();
-                    if (data.action === 'RECORD') triggerRecord(data.customName);
-                    if (data.action === 'RESET') triggerReset();
-                } else {
-                    // Guests receive direct synchronous state payloads from the Host
-                    if (data.type === 'STATE_SYNC') {
-                        isRunning = data.isRunning;
-                        startTime = data.startTime;
-                        elapsedTime = data.elapsedTime;
-                        raceData = data.raceData;
-                        obstacleCount = data.obstacleCount;
-                        
-                        renderTableUI();
-                        updateClientClockDisplay();
-                    }
-                }
-            });
-        }
-
-        // Send actions up to host, or handle locally if you are the host
-        function sendAction(actionType) {
-            let customName = "";
-            if (actionType === 'RECORD') {
-                const nameInput = document.getElementById('obstacleName');
-                customName = nameInput.value.trim();
-                nameInput.value = "";
-            }
-
-            if (isHost) {
-                if (actionType === 'START_STOP') triggerStartStop();
-                if (actionType === 'RECORD') triggerRecord(customName);
-                if (actionType === 'RESET') triggerReset();
-            } else {
-                // Guests broadcast action request back up to host node
-                if(conn && conn.open) {
-                    conn.send({ action: actionType, customName: customName });
-                }
+                renderTableUI();
+                updateClientClockDisplay(); // Crucial: Kickstarts the visual loop for guests
             }
         }
+    });
+}
 
-        function sendStateToPeers() {
-            if (!isHost) return;
-            const payload = {
-                type: 'STATE_SYNC',
-                isRunning: isRunning,
-                startTime: startTime,
-                elapsedTime: elapsedTime,
-                raceData: raceData,
-                obstacleCount: obstacleCount
-            };
-            connections.forEach(c => {
-                if(c.open) c.send(payload);
-            });
+function sendAction(actionType) {
+    let customName = "";
+    if (actionType === 'RECORD') {
+        const nameInput = document.getElementById('obstacleName');
+        customName = nameInput.value.trim();
+        nameInput.value = "";
+    }
+
+    if (isHost) {
+        if (actionType === 'START_STOP') triggerStartStop();
+        if (actionType === 'RECORD') triggerRecord(customName);
+        if (actionType === 'RESET') triggerReset();
+    } else {
+        if(conn && conn.open) {
+            conn.send({ action: actionType, customName: customName });
         }
+    }
+}
 
-        // --- CORE STOPWATCH ACTIONS (Host Execution) ---
+function sendStateToPeers() {
+    if (!isHost) return;
+    const payload = {
+        type: 'STATE_SYNC',
+        isRunning: isRunning,
+        startTime: startTime,
+        elapsedTime: elapsedTime,
+        raceData: raceData,
+        obstacleCount: obstacleCount
+    };
+    connections.forEach(c => {
+        if(c.open) c.send(payload);
+    });
+}
 
-        function triggerStartStop() {
-            if (!isRunning) {
-                startTime = Date.now() - elapsedTime;
-                isRunning = true;
-            } else {
-                elapsedTime = Date.now() - startTime;
-                isRunning = false;
-            }
-            sendStateToPeers();
-            updateClientClockDisplay();
-        }
+// --- CORE STOPWATCH ACTIONS (Host Execution) ---
+function triggerStartStop() {
+    if (!isRunning) {
+        startTime = Date.now() - elapsedTime;
+        isRunning = true;
+    } else {
+        elapsedTime = Date.now() - startTime;
+        isRunning = false;
+    }
+    sendStateToPeers();
+    updateClientClockDisplay();
+}
 
-        function triggerRecord(customName) {
-            let currentTrackedTime = isRunning ? (Date.now() - startTime) : elapsedTime;
-            if (currentTrackedTime === 0) return;
+function triggerRecord(customName) {
+    let currentTrackedTime = isRunning ? (Date.now() - startTime) : elapsedTime;
+    if (currentTrackedTime === 0) return;
 
-            obstacleCount++;
-            if (!customName) customName = `Obstacle ${obstacleCount}`;
+    obstacleCount++;
+    if (!customName) customName = `Obstacle ${obstacleCount}`;
 
-            raceData.push({
-                "Obstacle Name": customName,
-                "Time of Day": new Date().toLocaleTimeString(),
-                "Race Duration": formatTime(currentTrackedTime)
-            });
+    raceData.push({
+        "Obstacle Name": customName,
+        "Time of Day": new Date().toLocaleTimeString(),
+        "Race Duration": formatTime(currentTrackedTime)
+    });
 
-            sendStateToPeers();
-            renderTableUI();
-        }
+    sendStateToPeers();
+    renderTableUI();
+}
 
-        function triggerReset() {
-            isRunning = false;
-            elapsedTime = 0;
-            startTime = 0;
-            // Kept history intact per previous request requirement
-            sendStateToPeers();
-            updateClientClockDisplay();
-        }
+function triggerReset() {
+    isRunning = false;
+    elapsedTime = 0;
+    startTime = 0;
+    sendStateToPeers();
+    updateClientClockDisplay();
+}
 
-        // --- RENDER & REFRESH ELEMENTS ---
+// --- RENDER & REFRESH ELEMENTS ---
+function updateClientClockDisplay() {
+    clearInterval(timerInterval);
+    const btn = document.getElementById('startStopBtn');
 
-        function updateClientClockDisplay() {
-            clearInterval(timerInterval);
-            const btn = document.getElementById('startStopBtn');
+    if (isRunning) {
+        btn.innerText = 'Stop';
+        btn.className = 'stop';
+        
+        // This loop makes sure every single joined device redraws the text dynamically
+        timerInterval = setInterval(() => {
+            document.getElementById('display').innerText = formatTime(Date.now() - startTime);
+        }, 10);
+    } else {
+        btn.innerText = 'Start';
+        btn.className = '';
+        document.getElementById('display').innerText = formatTime(elapsedTime);
+    }
+}
 
-            if (isRunning) {
-                btn.innerText = 'Stop';
-                btn.className = 'stop';
-                timerInterval = setInterval(() => {
-                    document.getElementById('display').innerText = formatTime(Date.now() - startTime);
-                }, 10);
-            } else {
-                btn.innerText = 'Start';
-                btn.className = '';
-                document.getElementById('display').innerText = formatTime(elapsedTime);
-            }
-        }
+function renderTableUI() {
+    const tbody = document.getElementById('resultsBody');
+    tbody.innerHTML = '';
+    raceData.forEach(item => {
+        const row = `<tr>
+            <td>${item["Obstacle Name"]}</td>
+            <td>${item["Time of Day"]}</td>
+            <td>${item["Race Duration"]}</td>
+        </tr>`;
+        tbody.innerHTML += row;
+    });
+}
 
-        function renderTableUI() {
-            const tbody = document.getElementById('resultsBody');
-            tbody.innerHTML = '';
-            raceData.forEach(item => {
-                const row = `<tr>
-                    <td>${item["Obstacle Name"]}</td>
-                    <td>${item["Time of Day"]}</td>
-                    <td>${item["Race Duration"]}</td>
-                </tr>`;
-                tbody.innerHTML += row;
-            });
-        }
+function formatTime(ms) {
+    if (ms < 0) ms = 0;
+    let milliseconds = Math.floor((ms % 1000) / 10);
+    let seconds = Math.floor((ms / 1000) % 60);
+    let minutes = Math.floor((ms / (1000 * 60)) % 60);
+    let hours = Math.floor((ms / (1000 * 60 * 60)) % 24);
+    return [hours, minutes, seconds].map(v => v.toString().padStart(2, '0')).join(':') + '.' + milliseconds.toString().padStart(2, '0');
+}
 
-        function formatTime(ms) {
-            if (ms < 0) ms = 0;
-            let milliseconds = Math.floor((ms % 1000) / 10);
-            let seconds = Math.floor((ms / 1000) % 60);
-            let minutes = Math.floor((ms / (1000 * 60)) % 60);
-            let hours = Math.floor((ms / (1000 * 60 * 60)) % 24);
-            return [hours, minutes, seconds].map(v => v.toString().padStart(2, '0')).join(':') + '.' + milliseconds.toString().padStart(2, '0');
-        }
-
-        function exportToExcel() {
-            if (raceData.length === 0) return alert("No times recorded yet!");
-            const worksheet = XLSX.utils.json_to_sheet(raceData);
-            const workbook = XLSX.utils.book_new();
-            XLSX.utils.book_append_sheet(workbook, worksheet, "Race Results");
-            XLSX.writeFile(workbook, "room_race_results.xlsx");
-        }
+function exportToExcel() {
+    if (raceData.length === 0) return alert("No times recorded yet!");
+    const worksheet = XLSX.utils.json_to_sheet(raceData);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, "Race Results");
+    XLSX.writeFile(workbook, "room_race_results.xlsx");
+}
     </script>
 </body>
 </html>
