@@ -46,14 +46,21 @@
         .input-group {
             margin: 15px 0;
         }
+        label {
+            display: block;
+            font-weight: bold;
+            margin-bottom: 5px;
+            color: #555;
+        }
         input[type="text"], input[type="number"] {
             font-size: 1rem;
             padding: 10px;
-            width: 60%;
+            width: 80%;
             max-width: 250px;
             border: 1px solid #ccc;
             border-radius: 4px;
-            margin: 5px;
+            margin: 5px auto 15px auto;
+            display: inline-block;
         }
         button {
             font-size: 1rem;
@@ -79,6 +86,10 @@
         th, td { border: 1px solid #ddd; padding: 10px; text-align: left; }
         th { background-color: #f2f2f2; }
         .hidden { display: none; }
+        .divider {
+            margin: 20px 0;
+            border-top: 1px dashed #ccc;
+        }
     </style>
 </head>
 <body>
@@ -86,15 +97,23 @@
     <h2>Live Multi-Device Race Room</h2>
 
     <div id="setupArea" class="setup-box">
-        <h3>Create a Racing Room</h3>
-        <input type="number" id="maxDevicesInput" placeholder="Max devices allowed (e.g. 5)" min="1" value="5">
-        <br>
-        <button onclick="createRoom()">Create New Room</button>
-        <p>— OR —</p>
-        <h3>Join an Existing Room</h3>
-        <input type="text" id="joinRoomInput" placeholder="Enter 4-Digit Room Code">
-        <br>
-        <button onclick="joinRoom()">Join Room</button>
+        <div style="margin-bottom: 20px;">
+            <h3>Option A: Create a Racing Room</h3>
+            <label for="maxDevicesInput">Set Device Limit:</label>
+            <input type="number" id="maxDevicesInput" placeholder="Max devices (e.g. 5)" min="1" value="5">
+            <br>
+            <button onclick="createRoom()">Create New Room</button>
+        </div>
+
+        <div class="divider"></div>
+
+        <div>
+            <h3>Option B: Join an Existing Room</h3>
+            <label for="joinRoomInput">Enter Code:</label>
+            <input type="text" id="joinRoomInput" placeholder="Enter 4-Digit Room Code">
+            <br>
+            <button onclick="joinRoom()">Join Room</button>
+        </div>
     </div>
 
     <div id="statusArea" class="hidden">
@@ -128,7 +147,7 @@
     </div>
 
     <script>
-        // Your Custom Firebase Config
+        // Your Custom Firebase Config (Verified for your Asia-Southeast DB node)
         const firebaseConfig = {
             apiKey: "AIzaSyBZ-4464p7-F_ZeBkAWv5012DcW0EyECCA",
             authDomain: "race-stopwatch.firebaseapp.com",
@@ -143,10 +162,10 @@
         firebase.initializeApp(firebaseConfig);
         const database = firebase.database();
 
-        // Generate a completely unique local device token name
+        // Unique local device key to avoid counting collisions
         const uniqueDeviceId = "device-" + Math.random().toString(36).substring(2, 15);
 
-        // App variables
+        // Global state vars
         let currentRoomId = "";
         let timerInterval;
         let isRunning = false;
@@ -170,6 +189,7 @@
 
             currentRoomId = generateRoomCode();
             
+            // Set up room profile data along with maximum limit structure
             database.ref('rooms/' + currentRoomId).set({
                 maxDevices: roomMaxDevices,
                 timerState: {
@@ -192,6 +212,7 @@
                     const allowedLimit = roomData.maxDevices || Infinity;
                     const currentPresence = roomData.presence ? Object.keys(roomData.presence).length : 0;
 
+                    // CHECK GATE: Abort if the session capacity tracker is completely full
                     if (currentPresence >= allowedLimit) {
                         return alert(`Cannot join room ${inputCode}. This room is full! (Max limit: ${allowedLimit} devices)`);
                     }
@@ -211,8 +232,7 @@
             document.getElementById('roomCodeDisplay').innerText = `Active Room Code: ${roomId}`;
             document.getElementById('appArea').classList.remove('hidden');
 
-            // --- FIXED UNIQUE DEVICE PRESENCE SYSTEM ---
-            // Force a dedicated database slot named after our uniqueDeviceId variable
+            // --- UNIQUE DEVICE SIGN-IN NODE ---
             const myPresenceRef = database.ref('rooms/' + roomId + '/presence/' + uniqueDeviceId);
             
             database.ref('.info/connected').on('value', (snapshot) => {
@@ -222,7 +242,7 @@
                 }
             });
 
-            // Monitor total connected count
+            // Monitor total counts live
             database.ref('rooms/' + roomId + '/presence').on('value', (snapshot) => {
                 const presenceData = snapshot.val();
                 const totalConnected = presenceData ? Object.keys(presenceData).length : 0;
@@ -231,7 +251,7 @@
                 document.getElementById('deviceCountDisplay').innerText = `Connected Devices: ${totalConnected} / ${displayLimit}`;
             });
 
-            // 1. Listen to timer adjustments
+            // 1. Synchronize the clock timers
             database.ref('rooms/' + roomId + '/timerState').on('value', (snapshot) => {
                 const data = snapshot.val();
                 if (data) {
@@ -242,7 +262,7 @@
                 }
             });
 
-            // 2. Listen to split logs
+            // 2. Synchronize split data lists
             database.ref('rooms/' + roomId + '/records').on('value', (snapshot) => {
                 const data = snapshot.val();
                 const tbody = document.getElementById('resultsBody');
@@ -259,91 +279,90 @@
                         </tr>`;
                         tbody.innerHTML += row;
 
-                    raceData.push({
-                        "Obstacle Name": record.name,
-                        "Time of Day": record.timestamp,
-                        "Race Duration": record.splitTime
+                        raceData.push({
+                            "Obstacle Name": record.name,
+                            "Time of Day": record.timestamp,
+                            "Race Duration": record.splitTime
+                        });
                     });
-                });
-                obstacleCount = Object.keys(data).length;
+                    obstacleCount = Object.keys(data).length;
+                } else {
+                    obstacleCount = 0;
+                }
+            });
+        }
+
+        function updateClockUI() {
+            clearInterval(timerInterval);
+            const btn = document.getElementById('startStopBtn');
+
+            if (isRunning) {
+                btn.innerText = 'Stop';
+                btn.className = 'stop';
+                timerInterval = setInterval(() => {
+                    document.getElementById('display').innerText = formatTime(Date.now() - startTime);
+                }, 10);
             } else {
-                obstacleCount = 0;
+                btn.innerText = 'Start';
+                btn.className = '';
+                document.getElementById('display').innerText = formatTime(elapsedTime);
             }
-        });
-    }
-
-    // --- UI CLOCK SYNC LOOP ---
-    function updateClockUI() {
-        clearInterval(timerInterval);
-        const btn = document.getElementById('startStopBtn');
-
-        if (isRunning) {
-            btn.innerText = 'Stop';
-            btn.className = 'stop';
-            timerInterval = setInterval(() => {
-                document.getElementById('display').innerText = formatTime(Date.now() - startTime);
-            }, 10);
-        } else {
-            btn.innerText = 'Start';
-            btn.className = '';
-            document.getElementById('display').innerText = formatTime(elapsedTime);
         }
-    }
 
-    function handleStartStopClick() {
-        if (!isRunning) {
-            database.ref('rooms/' + currentRoomId + '/timerState').set({
-                isRunning: true,
-                startTime: Date.now() - elapsedTime,
-                elapsedTime: elapsedTime
-            });
-        } else {
-            database.ref('rooms/' + currentRoomId + '/timerState').set({
-                isRunning: false,
-                startTime: startTime,
-                elapsedTime: Date.now() - startTime
-            });
+        function handleStartStopClick() {
+            if (!isRunning) {
+                database.ref('rooms/' + currentRoomId + '/timerState').set({
+                    isRunning: true,
+                    startTime: Date.now() - elapsedTime,
+                    elapsedTime: elapsedTime
+                });
+            } else {
+                database.ref('rooms/' + currentRoomId + '/timerState').set({
+                    isRunning: false,
+                    startTime: startTime,
+                    elapsedTime: Date.now() - startTime
+                });
+            }
         }
-    }
 
-    function handleRecordClick() {
-        let currentTrackedTime = isRunning ? (Date.now() - startTime) : elapsedTime;
-        if (currentTrackedTime === 0) return;
+        function handleRecordClick() {
+            let currentTrackedTime = isRunning ? (Date.now() - startTime) : elapsedTime;
+            if (currentTrackedTime === 0) return;
 
-        const nameInput = document.getElementById('obstacleName');
-        let customName = nameInput.value.trim();
-        if (customName === "") customName = `Obstacle ${obstacleCount + 1}`;
+            const nameInput = document.getElementById('obstacleName');
+            let customName = nameInput.value.trim();
+            if (customName === "") customName = `Obstacle ${obstacleCount + 1}`;
 
-        database.ref('rooms/' + currentRoomId + '/records').push({
-            name: customName,
-            timestamp: new Date().toLocaleTimeString(),
-            splitTime: formatTime(currentTrackedTime)
-        });
+            database.ref('rooms/' + currentRoomId + '/records').push({
+                name: customName,
+                timestamp: new Date().toLocaleTimeString(),
+                splitTime: formatTime(currentTrackedTime)
+            });
 
-        nameInput.value = "";
-    }
+            nameInput.value = "";
+        }
 
-    function handleResetClick() {
-        database.ref('rooms/' + currentRoomId + '/timerState').set({ isRunning: false, startTime: 0, elapsedTime: 0 });
-        database.ref('rooms/' + currentRoomId + '/records').remove();
-    }
+        function handleResetClick() {
+            database.ref('rooms/' + currentRoomId + '/timerState').set({ isRunning: false, startTime: 0, elapsedTime: 0 });
+            database.ref('rooms/' + currentRoomId + '/records').remove();
+        }
 
-    function formatTime(ms) {
-        if (ms < 0) ms = 0;
-        let milliseconds = Math.floor((ms % 1000) / 10);
-        let seconds = Math.floor((ms / 1000) % 60);
-        let minutes = Math.floor((ms / (1000 * 60)) % 60);
-        let hours = Math.floor((ms / (1000 * 60 * 60)) % 24);
-        return [hours, minutes, seconds].map(v => v.toString().padStart(2, '0')).join(':') + '.' + milliseconds.toString().padStart(2, '0');
-    }
+        function formatTime(ms) {
+            if (ms < 0) ms = 0;
+            let milliseconds = Math.floor((ms % 1000) / 10);
+            let seconds = Math.floor((ms / 1000) % 60);
+            let minutes = Math.floor((ms / (1000 * 60)) % 60);
+            let hours = Math.floor((ms / (1000 * 60 * 60)) % 24);
+            return [hours, minutes, seconds].map(v => v.toString().padStart(2, '0')).join(':') + '.' + milliseconds.toString().padStart(2, '0');
+        }
 
-    function exportToExcel() {
         if (raceData.length === 0) return alert("No times recorded yet!");
-        const worksheet = XLSX.utils.json_to_sheet(raceData);
-        const workbook = XLSX.utils.book_new();
-        XLSX.utils.book_append_sheet(workbook, worksheet, "Race Results");
-        XLSX.writeFile(workbook, `room_${currentRoomId}_results.xlsx`);
-    }
-</script>
+        function exportToExcel() {
+            const worksheet = XLSX.utils.json_to_sheet(raceData);
+            const workbook = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(workbook, worksheet, "Race Results");
+            XLSX.writeFile(workbook, `room_${currentRoomId}_results.xlsx`);
+        }
+    </script>
 </body>
 </html>
