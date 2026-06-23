@@ -3,8 +3,10 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Obstacle Race Tracker</title>
+    <title>P2P Room Race Tracker</title>
     <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+
     <style>
         body {
             font-family: Arial, sans-serif;
@@ -21,16 +23,27 @@
             font-family: monospace;
             color: #333;
         }
-        .input-group {
-            margin: 20px 0;
+        .setup-box {
+            background: #fff;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .room-highlight {
+            font-size: 1.5rem;
+            font-weight: bold;
+            color: #007bff;
+            margin: 10px 0;
         }
         input[type="text"] {
             font-size: 1rem;
             padding: 10px;
             width: 60%;
-            max-width: 300px;
+            max-width: 250px;
             border: 1px solid #ccc;
             border-radius: 4px;
+            margin: 5px;
         }
         button {
             font-size: 1rem;
@@ -41,15 +54,11 @@
             border-radius: 4px;
             background-color: #007bff;
             color: white;
-            transition: background 0.2s;
         }
         button:hover { background-color: #0056b3; }
         button.stop { background-color: #dc3545; }
-        button.stop:hover { background-color: #bd2130; }
         button.save { background-color: #28a745; }
-        button.save:hover { background-color: #218838; }
         button.export { background-color: #17a2b8; }
-        button.export:hover { background-color: #138496; }
         
         table {
             width: 100%;
@@ -57,144 +66,271 @@
             border-collapse: collapse;
             background: white;
         }
-        th, td {
-            border: 1px solid #ddd;
-            padding: 10px;
-            text-align: left;
-        }
+        th, td { border: 1px solid #ddd; padding: 10px; text-align: left; }
         th { background-color: #f2f2f2; }
+        .hidden { display: none; }
     </style>
 </head>
 <body>
 
-    <h2>Obstacle Race Stopwatch</h2>
-    
-    <div class="display" id="display">00:00:00.00</div>
+    <h2>P2P Race Stopwatch Room</h2>
 
-    <div class="input-group">
-        <input type="text" id="obstacleName" placeholder="Next Obstacle Name (e.g., Wall Climb)">
+    <div id="setupArea" class="setup-box">
+        <h3>Join or Create a Room</h3>
+        <button onclick="createRoom()">Create New Room</button>
+        <p>— OR —</p>
+        <input type="text" id="joinRoomInput" placeholder="Enter Room ID Code">
+        <button onclick="joinRoom()">Join Room</button>
     </div>
 
-    <button id="startStopBtn" onclick="startStop()">Start</button>
-    <button onclick="recordTime()" class="save">Record Obstacle</button>
-    <button onclick="resetTimer()">Reset Timer</button>
-    <button onclick="exportToExcel()" class="export">Download Excel</button>
+    <div id="statusArea" class="hidden">
+        <p id="roleBadge" style="font-weight: bold;"></p>
+        <div id="roomCodeDisplay" class="room-highlight"></div>
+    </div>
 
-    <h3>Recorded Times</h3>
-    <table id="resultsTable">
-        <thead>
-            <tr>
-                <th>Obstacle / Marker Name</th>
-                <th>Timestamp</th>
-                <th>Split Time</th>
-            </tr>
-        </thead>
-        <tbody id="resultsBody">
-            </tbody>
-    </table>
+    <div id="appArea" class="hidden">
+        <div class="display" id="display">00:00:00.00</div>
+
+        <div class="input-group">
+            <input type="text" id="obstacleName" placeholder="Next Obstacle Name">
+        </div>
+
+        <button id="startStopBtn" onclick="sendAction('START_STOP')">Start</button>
+        <button onclick="sendAction('RECORD')" class="save">Record Obstacle</button>
+        <button onclick="sendAction('RESET')">Reset Timer</button>
+        <button onclick="exportToExcel()" class="export">Download Excel</button>
+
+        <h3>Recorded Times</h3>
+        <table>
+            <thead>
+                <tr>
+                    <th>Obstacle / Marker Name</th>
+                    <th>Timestamp</th>
+                    <th>Split Time</th>
+                </tr>
+            </thead>
+            <tbody id="resultsBody"></tbody>
+        </table>
+    </div>
 
     <script>
-        let timer;
-        let startTime;
+        let peer;
+        let conn; // For Peer connection
+        let connections = []; // Host keeps track of all joined peers
+        let isHost = false;
+        let roomID = "";
+
+        // Stopwatch Core Variables (Only simulated accurately by Host)
+        let timerInterval;
+        let startTime = 0;
         let elapsedTime = 0;
         let isRunning = false;
         let obstacleCount = 0;
-        
-        // This array and the HTML table now persist until the page is refreshed!
         let raceData = [];
 
-        function startStop() {
-            const btn = document.getElementById('startStopBtn');
-            if (!isRunning) {
-                startTime = Date.now() - elapsedTime;
-                timer = setInterval(updateDisplay, 10);
-                btn.innerText = 'Stop';
-                btn.className = 'stop';
-                isRunning = true;
+        // --- ROOM CREATION & JOINING LOGIC ---
+
+        // Helper to generate a clean 4-digit numeric Kahoot code
+        function generateRoomCode() {
+            return Math.floor(1000 + Math.random() * 9000).toString();
+        }
+
+        function createRoom() {
+            isHost = true;
+            roomID = generateRoomCode();
+            
+            // Connect to free public PeerJS cloud server using our custom 4-digit ID
+            peer = new Peer(roomID);
+
+            peer.on('open', (id) => {
+                showAppInterface(`Host Mode`, `Room ID Code: ${id}`);
+            });
+
+            // Host listens for incoming peer devices joining the room
+            peer.on('connection', (connection) => {
+                connections.push(connection);
+                setupDataListener(connection);
+                
+                // Immediately push current clock state to the newly joined peer
+                sendStateToPeers();
+            });
+        }
+
+        function joinRoom() {
+            isHost = false;
+            roomID = document.getElementById('joinRoomInput').value.trim();
+            
+            if(!roomID) return alert("Please enter a room code!");
+
+            peer = new Peer(); // Generate a random ID for this peer device
+
+            peer.on('open', () => {
+                // Connect directly to the host's room ID
+                conn = peer.connect(roomID);
+                setupDataListener(conn);
+                
+                conn.on('open', () => {
+                    showAppInterface(`Peer Guest Mode`, `Connected to Room: ${roomID}`);
+                });
+            });
+        }
+
+        function showAppInterface(role, statusText) {
+            document.getElementById('setupArea').classList.add('hidden');
+            document.getElementById('statusArea').classList.remove('hidden');
+            document.getElementById('appArea').classList.remove('hidden');
+            document.getElementById('roleBadge').innerText = role;
+            document.getElementById('roomCodeDisplay').innerText = statusText;
+        }
+
+        // --- DATA NETWORKING PIPELINE ---
+
+        function setupDataListener(connection) {
+            connection.on('data', (data) => {
+                if (isHost) {
+                    // Host receives action commands from guest browsers
+                    if (data.action === 'START_STOP') triggerStartStop();
+                    if (data.action === 'RECORD') triggerRecord(data.customName);
+                    if (data.action === 'RESET') triggerReset();
+                } else {
+                    // Guests receive direct synchronous state payloads from the Host
+                    if (data.type === 'STATE_SYNC') {
+                        isRunning = data.isRunning;
+                        startTime = data.startTime;
+                        elapsedTime = data.elapsedTime;
+                        raceData = data.raceData;
+                        obstacleCount = data.obstacleCount;
+                        
+                        renderTableUI();
+                        updateClientClockDisplay();
+                    }
+                }
+            });
+        }
+
+        // Send actions up to host, or handle locally if you are the host
+        function sendAction(actionType) {
+            let customName = "";
+            if (actionType === 'RECORD') {
+                const nameInput = document.getElementById('obstacleName');
+                customName = nameInput.value.trim();
+                nameInput.value = "";
+            }
+
+            if (isHost) {
+                if (actionType === 'START_STOP') triggerStartStop();
+                if (actionType === 'RECORD') triggerRecord(customName);
+                if (actionType === 'RESET') triggerReset();
             } else {
-                clearInterval(timer);
-                elapsedTime = Date.now() - startTime;
-                btn.innerText = 'Start';
-                btn.className = '';
-                isRunning = false;
+                // Guests broadcast action request back up to host node
+                if(conn && conn.open) {
+                    conn.send({ action: actionType, customName: customName });
+                }
             }
         }
 
-        // Modified: Reset only controls the clock numbers now
-        function resetTimer() {
-            clearInterval(timer);
-            elapsedTime = 0;
-            isRunning = false;
-            
-            document.getElementById('display').innerText = "00:00:00.00";
-            document.getElementById('startStopBtn').innerText = 'Start';
-            document.getElementById('startStopBtn').className = '';
-            document.getElementById('obstacleName').value = '';
-            // Notice we removed the lines that cleared raceData, obstacleCount, and resultsBody!
+        function sendStateToPeers() {
+            if (!isHost) return;
+            const payload = {
+                type: 'STATE_SYNC',
+                isRunning: isRunning,
+                startTime: startTime,
+                elapsedTime: elapsedTime,
+                raceData: raceData,
+                obstacleCount: obstacleCount
+            };
+            connections.forEach(c => {
+                if(c.open) c.send(payload);
+            });
         }
 
-        function updateDisplay() {
-            elapsedTime = Date.now() - startTime;
-            document.getElementById('display').innerText = formatTime(elapsedTime);
+        // --- CORE STOPWATCH ACTIONS (Host Execution) ---
+
+        function triggerStartStop() {
+            if (!isRunning) {
+                startTime = Date.now() - elapsedTime;
+                isRunning = true;
+            } else {
+                elapsedTime = Date.now() - startTime;
+                isRunning = false;
+            }
+            sendStateToPeers();
+            updateClientClockDisplay();
+        }
+
+        function triggerRecord(customName) {
+            let currentTrackedTime = isRunning ? (Date.now() - startTime) : elapsedTime;
+            if (currentTrackedTime === 0) return;
+
+            obstacleCount++;
+            if (!customName) customName = `Obstacle ${obstacleCount}`;
+
+            raceData.push({
+                "Obstacle Name": customName,
+                "Time of Day": new Date().toLocaleTimeString(),
+                "Race Duration": formatTime(currentTrackedTime)
+            });
+
+            sendStateToPeers();
+            renderTableUI();
+        }
+
+        function triggerReset() {
+            isRunning = false;
+            elapsedTime = 0;
+            startTime = 0;
+            // Kept history intact per previous request requirement
+            sendStateToPeers();
+            updateClientClockDisplay();
+        }
+
+        // --- RENDER & REFRESH ELEMENTS ---
+
+        function updateClientClockDisplay() {
+            clearInterval(timerInterval);
+            const btn = document.getElementById('startStopBtn');
+
+            if (isRunning) {
+                btn.innerText = 'Stop';
+                btn.className = 'stop';
+                timerInterval = setInterval(() => {
+                    document.getElementById('display').innerText = formatTime(Date.now() - startTime);
+                }, 10);
+            } else {
+                btn.innerText = 'Start';
+                btn.className = '';
+                document.getElementById('display').innerText = formatTime(elapsedTime);
+            }
+        }
+
+        function renderTableUI() {
+            const tbody = document.getElementById('resultsBody');
+            tbody.innerHTML = '';
+            raceData.forEach(item => {
+                const row = `<tr>
+                    <td>${item["Obstacle Name"]}</td>
+                    <td>${item["Time of Day"]}</td>
+                    <td>${item["Race Duration"]}</td>
+                </tr>`;
+                tbody.innerHTML += row;
+            });
         }
 
         function formatTime(ms) {
+            if (ms < 0) ms = 0;
             let milliseconds = Math.floor((ms % 1000) / 10);
             let seconds = Math.floor((ms / 1000) % 60);
             let minutes = Math.floor((ms / (1000 * 60)) % 60);
             let hours = Math.floor((ms / (1000 * 60 * 60)) % 24);
-
-            return [
-                hours.toString().padStart(2, '0'),
-                minutes.toString().padStart(2, '0'),
-                seconds.toString().padStart(2, '0')
-            ].join(':') + '.' + milliseconds.toString().padStart(2, '0');
-        }
-
-        function recordTime() {
-            if (elapsedTime === 0) return;
-            
-            obstacleCount++;
-            
-            const nameInput = document.getElementById('obstacleName');
-            let customName = nameInput.value.trim();
-            
-            if (customName === "") {
-                customName = `Obstacle ${obstacleCount}`;
-            }
-
-            const currentTimeStr = formatTime(elapsedTime);
-            const currentClockTime = new Date().toLocaleTimeString();
-
-            // 1. Add to UI table
-            const tbody = document.getElementById('resultsBody');
-            const row = `<tr>
-                <td>${customName}</td>
-                <td>${currentClockTime}</td>
-                <td>${currentTimeStr}</td>
-            </tr>`;
-            tbody.innerHTML += row;
-
-            // 2. Add to JavaScript array for Excel export
-            raceData.push({
-                "Obstacle Name": customName,
-                "Time of Day": currentClockTime,
-                "Race Duration": currentTimeStr
-            });
-
-            nameInput.value = "";
+            return [hours, minutes, seconds].map(v => v.toString().padStart(2, '0')).join(':') + '.' + milliseconds.toString().padStart(2, '0');
         }
 
         function exportToExcel() {
-            if (raceData.length === 0) {
-                alert("No times recorded yet!");
-                return;
-            }
-
+            if (raceData.length === 0) return alert("No times recorded yet!");
             const worksheet = XLSX.utils.json_to_sheet(raceData);
             const workbook = XLSX.utils.book_new();
             XLSX.utils.book_append_sheet(workbook, worksheet, "Race Results");
-            XLSX.writeFile(workbook, "obstacle_race_results.xlsx");
+            XLSX.writeFile(workbook, "room_race_results.xlsx");
         }
     </script>
 </body>
