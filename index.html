@@ -147,7 +147,7 @@
     </div>
 
     <script>
-        // Your Custom Firebase Config (Verified for your Asia-Southeast DB node)
+        // Your Custom Firebase Config
         const firebaseConfig = {
             apiKey: "AIzaSyBZ-4464p7-F_ZeBkAWv5012DcW0EyECCA",
             authDomain: "race-stopwatch.firebaseapp.com",
@@ -189,7 +189,6 @@
 
             currentRoomId = generateRoomCode();
             
-            // Set up room profile data along with maximum limit structure
             database.ref('rooms/' + currentRoomId).set({
                 maxDevices: roomMaxDevices,
                 timerState: {
@@ -212,7 +211,6 @@
                     const allowedLimit = roomData.maxDevices || Infinity;
                     const currentPresence = roomData.presence ? Object.keys(roomData.presence).length : 0;
 
-                    // CHECK GATE: Abort if the session capacity tracker is completely full
                     if (currentPresence >= allowedLimit) {
                         return alert(`Cannot join room ${inputCode}. This room is full! (Max limit: ${allowedLimit} devices)`);
                     }
@@ -232,7 +230,6 @@
             document.getElementById('roomCodeDisplay').innerText = `Active Room Code: ${roomId}`;
             document.getElementById('appArea').classList.remove('hidden');
 
-            // --- UNIQUE DEVICE SIGN-IN NODE ---
             const myPresenceRef = database.ref('rooms/' + roomId + '/presence/' + uniqueDeviceId);
             
             database.ref('.info/connected').on('value', (snapshot) => {
@@ -242,7 +239,6 @@
                 }
             });
 
-            // Monitor total counts live
             database.ref('rooms/' + roomId + '/presence').on('value', (snapshot) => {
                 const presenceData = snapshot.val();
                 const totalConnected = presenceData ? Object.keys(presenceData).length : 0;
@@ -251,7 +247,6 @@
                 document.getElementById('deviceCountDisplay').innerText = `Connected Devices: ${totalConnected} / ${displayLimit}`;
             });
 
-            // 1. Synchronize the clock timers
             database.ref('rooms/' + roomId + '/timerState').on('value', (snapshot) => {
                 const data = snapshot.val();
                 if (data) {
@@ -262,7 +257,6 @@
                 }
             });
 
-            // 2. Synchronize split data lists
             database.ref('rooms/' + roomId + '/records').on('value', (snapshot) => {
                 const data = snapshot.val();
                 const tbody = document.getElementById('resultsBody');
@@ -356,8 +350,8 @@
             return [hours, minutes, seconds].map(v => v.toString().padStart(2, '0')).join(':') + '.' + milliseconds.toString().padStart(2, '0');
         }
 
-        if (raceData.length === 0) return alert("No times recorded yet!");
         function exportToExcel() {
+            if (raceData.length === 0) return alert("No times recorded yet!");
             const worksheet = XLSX.utils.json_to_sheet(raceData);
             const workbook = XLSX.utils.book_new();
             XLSX.utils.book_append_sheet(workbook, worksheet, "Race Results");
