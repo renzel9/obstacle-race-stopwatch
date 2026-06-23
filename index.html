@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Obstacle Race Tracker</title>
+    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 600px;
+            margin: 40px auto;
+            padding: 20px;
+            text-align: center;
+            background-color: #f4f7f6;
+        }
+        .display {
+            font-size: 3rem;
+            font-weight: bold;
+            margin: 20px 0;
+            font-family: monospace;
+            color: #333;
+        }
+        .input-group {
+            margin: 20px 0;
+        }
+        input[type="text"] {
+            font-size: 1rem;
+            padding: 10px;
+            width: 60%;
+            max-width: 300px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+        }
+        button {
+            font-size: 1rem;
+            padding: 10px 20px;
+            margin: 5px;
+            cursor: pointer;
+            border: none;
+            border-radius: 4px;
+            background-color: #007bff;
+            color: white;
+            transition: background 0.2s;
+        }
+        button:hover { background-color: #0056b3; }
+        button.stop { background-color: #dc3545; }
+        button.stop:hover { background-color: #bd2130; }
+        button.save { background-color: #28a745; }
+        button.save:hover { background-color: #218838; }
+        button.export { background-color: #17a2b8; }
+        button.export:hover { background-color: #138496; }
+        
+        table {
+            width: 100%;
+            margin-top: 30px;
+            border-collapse: collapse;
+            background: white;
+        }
+        th, td {
+            border: 1px solid #ddd;
+            padding: 10px;
+            text-align: left;
+        }
+        th { background-color: #f2f2f2; }
+    </style>
+</head>
+<body>
+
+    <h2>Obstacle Race Stopwatch</h2>
+    
+    <div class="display" id="display">00:00:00.00</div>
+
+    <div class="input-group">
+        <input type="text" id="obstacleName" placeholder="Next Obstacle Name (e.g., Wall Climb)">
+    </div>
+
+    <button id="startStopBtn" onclick="startStop()">Start</button>
+    <button onclick="recordTime()" class="save">Record Obstacle</button>
+    <button onclick="resetTimer()">Reset Timer</button>
+    <button onclick="exportToExcel()" class="export">Download Excel</button>
+
+    <h3>Recorded Times</h3>
+    <table id="resultsTable">
+        <thead>
+            <tr>
+                <th>Obstacle / Marker Name</th>
+                <th>Timestamp</th>
+                <th>Split Time</th>
+            </tr>
+        </thead>
+        <tbody id="resultsBody">
+            </tbody>
+    </table>
+
+    <script>
+        let timer;
+        let startTime;
+        let elapsedTime = 0;
+        let isRunning = false;
+        let obstacleCount = 0;
+        
+        // This array and the HTML table now persist until the page is refreshed!
+        let raceData = [];
+
+        function startStop() {
+            const btn = document.getElementById('startStopBtn');
+            if (!isRunning) {
+                startTime = Date.now() - elapsedTime;
+                timer = setInterval(updateDisplay, 10);
+                btn.innerText = 'Stop';
+                btn.className = 'stop';
+                isRunning = true;
+            } else {
+                clearInterval(timer);
+                elapsedTime = Date.now() - startTime;
+                btn.innerText = 'Start';
+                btn.className = '';
+                isRunning = false;
+            }
+        }
+
+        // Modified: Reset only controls the clock numbers now
+        function resetTimer() {
+            clearInterval(timer);
+            elapsedTime = 0;
+            isRunning = false;
+            
+            document.getElementById('display').innerText = "00:00:00.00";
+            document.getElementById('startStopBtn').innerText = 'Start';
+            document.getElementById('startStopBtn').className = '';
+            document.getElementById('obstacleName').value = '';
+            // Notice we removed the lines that cleared raceData, obstacleCount, and resultsBody!
+        }
+
+        function updateDisplay() {
+            elapsedTime = Date.now() - startTime;
+            document.getElementById('display').innerText = formatTime(elapsedTime);
+        }
+
+        function formatTime(ms) {
+            let milliseconds = Math.floor((ms % 1000) / 10);
+            let seconds = Math.floor((ms / 1000) % 60);
+            let minutes = Math.floor((ms / (1000 * 60)) % 60);
+            let hours = Math.floor((ms / (1000 * 60 * 60)) % 24);
+
+            return [
+                hours.toString().padStart(2, '0'),
+                minutes.toString().padStart(2, '0'),
+                seconds.toString().padStart(2, '0')
+            ].join(':') + '.' + milliseconds.toString().padStart(2, '0');
+        }
+
+        function recordTime() {
+            if (elapsedTime === 0) return;
+            
+            obstacleCount++;
+            
+            const nameInput = document.getElementById('obstacleName');
+            let customName = nameInput.value.trim();
+            
+            if (customName === "") {
+                customName = `Obstacle ${obstacleCount}`;
+            }
+
+            const currentTimeStr = formatTime(elapsedTime);
+            const currentClockTime = new Date().toLocaleTimeString();
+
+            // 1. Add to UI table
+            const tbody = document.getElementById('resultsBody');
+            const row = `<tr>
+                <td>${customName}</td>
+                <td>${currentClockTime}</td>
+                <td>${currentTimeStr}</td>
+            </tr>`;
+            tbody.innerHTML += row;
+
+            // 2. Add to JavaScript array for Excel export
+            raceData.push({
+                "Obstacle Name": customName,
+                "Time of Day": currentClockTime,
+                "Race Duration": currentTimeStr
+            });
+
+            nameInput.value = "";
+        }
+
+        function exportToExcel() {
+            if (raceData.length === 0) {
+                alert("No times recorded yet!");
+                return;
+            }
+
+            const worksheet = XLSX.utils.json_to_sheet(raceData);
+            const workbook = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(workbook, worksheet, "Race Results");
+            XLSX.writeFile(workbook, "obstacle_race_results.xlsx");
+        }
+    </script>
+</body>
+</html>
