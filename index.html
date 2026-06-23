@@ -38,6 +38,11 @@
             color: #007bff;
             margin: 10px 0;
         }
+        .device-count {
+            font-size: 1rem;
+            color: #666;
+            margin-bottom: 15px;
+        }
         input[type="text"] {
             font-size: 1rem;
             padding: 10px;
@@ -87,6 +92,7 @@
 
     <div id="statusArea" class="hidden">
         <div id="roomCodeDisplay" class="room-highlight"></div>
+        <div id="deviceCountDisplay" class="device-count">Connected Devices: 0</div>
     </div>
 
     <div id="appArea" class="hidden">
@@ -139,14 +145,13 @@
         let obstacleCount = 0;
         let raceData = []; 
 
-        // --- ROOM CODES MANAGMENT ---
+        // --- ROOM CODES MANAGEMENT ---
         function generateRoomCode() {
             return Math.floor(1000 + Math.random() * 9000).toString();
         }
 
         function createRoom() {
             currentRoomId = generateRoomCode();
-            // Setup a clean path inside the database for this new room code
             database.ref('rooms/' + currentRoomId + '/timerState').set({
                 isRunning: false,
                 startTime: 0,
@@ -159,7 +164,6 @@
             const inputCode = document.getElementById('joinRoomInput').value.trim();
             if (!inputCode) return alert("Please enter a room code!");
             
-            // Check if the room exists before jumping in
             database.ref('rooms/' + inputCode).once('value', (snapshot) => {
                 if (snapshot.exists()) {
                     currentRoomId = inputCode;
@@ -176,6 +180,27 @@
             document.getElementById('statusArea').classList.remove('hidden');
             document.getElementById('roomCodeDisplay').innerText = `Active Room Code: ${roomId}`;
             document.getElementById('appArea').classList.remove('hidden');
+
+            // --- DEVICE PRESENCE SYSTEM ---
+            // Create a temporary reference item unique to this device session
+            const myPresenceRef = database.ref('rooms/' + roomId + '/presence').push();
+            
+            // Monitor connection health to register and drop users automatically
+            database.ref('.info/connected').on('value', (snapshot) => {
+                if (snapshot.val() === true) {
+                    // Tell Firebase to delete this record if the user closes their app/tab
+                    myPresenceRef.onDisconnect().remove();
+                    // Set status to true to show we are currently online
+                    myPresenceRef.set(true);
+                }
+            });
+
+            // Listen for total connected devices count in this room
+            database.ref('rooms/' + roomId + '/presence').on('value', (snapshot) => {
+                const presenceData = snapshot.val();
+                const totalConnected = presenceData ? Object.keys(presenceData).length : 0;
+                document.getElementById('deviceCountDisplay').innerText = `Connected Devices: ${totalConnected}`;
+            });
 
             // 1. Listen to timer adjustments ONLY inside this room
             database.ref('rooms/' + roomId + '/timerState').on('value', (snapshot) => {
