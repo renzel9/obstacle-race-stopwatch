@@ -59,7 +59,6 @@
         button.stop { background-color: #dc3545; }
         button.save { background-color: #28a745; }
         button.export { background-color: #17a2b8; }
-        
         table {
             width: 100%;
             margin-top: 30px;
@@ -117,11 +116,20 @@
     <script>
         let peer;
         let conn; 
-        let connections = []; // Stores ALL connected guest devices
+        let connections = []; 
         let isHost = false;
         let roomID = "";
 
-        // Stopwatch Core Variables
+        // Ice configuration to bypass firewall/NAT routers
+        const peerConfig = {
+            config: {
+                iceServers: [
+                    { url: "stun:stun.l.google.com:19302" },
+                    { url: "stun:stun1.l.google.com:19302" }
+                ]
+            }
+        };
+
         let timerInterval;
         let startTime = 0;
         let elapsedTime = 0;
@@ -135,21 +143,31 @@
 
         function createRoom() {
             isHost = true;
+            // Append a unique word suffix so nobody in the world shares our exact code identifier
             roomID = generateRoomCode();
+            const uniqueGlobalID = "race-room-" + roomID;
             
-            peer = new Peer(roomID);
+            peer = new Peer(uniqueGlobalID, peerConfig);
+            
             peer.on('open', (id) => {
-                showAppInterface(`Host Mode`, `Room ID Code: ${id}`);
+                showAppInterface(`Host Mode`, `Room ID Code: ${roomID}`);
                 document.getElementById('connectedCount').classList.remove('hidden');
             });
 
-            // Listen for multiple incoming device connections
+            peer.on('error', (err) => {
+                if (err.type === 'unavailable-id') {
+                    // Auto-retry if someone accidentally took the generated room id number
+                    createRoom();
+                } else {
+                    alert("Network Connection Error: " + err.type);
+                }
+            });
+
             peer.on('connection', (connection) => {
                 connections.push(connection);
                 updateConnectedCount();
                 setupDataListener(connection);
                 
-                // Send current state to the new device once connection opens
                 connection.on('open', () => {
                     sendStateToPeers();
                 });
@@ -161,13 +179,19 @@
             roomID = document.getElementById('joinRoomInput').value.trim();
             if(!roomID) return alert("Please enter a room code!");
 
-            peer = new Peer();
+            const targetGlobalID = "race-room-" + roomID;
+            peer = new Peer(peerConfig);
+            
             peer.on('open', () => {
-                conn = peer.connect(roomID);
+                conn = peer.connect(targetGlobalID);
                 setupDataListener(conn);
                 conn.on('open', () => {
                     showAppInterface('Guest Mode', `Connected to Room: ${roomID}`);
                 });
+            });
+
+            peer.on('error', (err) => {
+                alert("Could not connect to room. Make sure the Host room is active! (" + err.type + ")");
             });
         }
 
@@ -185,7 +209,6 @@
             document.getElementById('roomCodeDisplay').innerText = statusText;
         }
 
-        // --- DATA NETWORKING PIPELINE ---
         function setupDataListener(connection) {
             connection.on('data', (data) => {
                 if (isHost) {
@@ -206,7 +229,6 @@
                 }
             });
 
-            // Handle clean disconnections
             connection.on('close', () => {
                 if (isHost) {
                     connections = connections.filter(c => c.peer !== connection.peer);
@@ -234,7 +256,6 @@
             }
         }
 
-        // Broadcast to EVERY connected guest channel
         function sendStateToPeers() {
             if (!isHost) return;
             const payload = {
@@ -252,7 +273,6 @@
             });
         }
 
-        // --- CORE STOPWATCH ACTIONS (Host Execution) ---
         function triggerStartStop() {
             if (!isRunning) {
                 startTime = Date.now() - elapsedTime;
@@ -290,7 +310,6 @@
             updateClientClockDisplay();
         }
 
-        // --- RENDER & REFRESH ELEMENTS ---
         function updateClientClockDisplay() {
             clearInterval(timerInterval);
             const btn = document.getElementById('startStopBtn');
@@ -298,7 +317,6 @@
             if (isRunning) {
                 btn.innerText = 'Stop';
                 btn.className = 'stop';
-                
                 timerInterval = setInterval(() => {
                     document.getElementById('display').innerText = formatTime(Date.now() - startTime);
                 }, 10);
